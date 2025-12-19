@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -16,46 +16,43 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system packages
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git zip unzip \
-            openjdk-17-jdk \
             autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
             cmake libffi-dev libssl-dev
 
-      - name: Install Python tools
+      - name: Accept SDK licenses + install build-tools (provides aidl)
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          yes | sdkmanager --licenses
+
+      - name: Install buildozer
         run: |
           python -m pip install --upgrade pip
-          python -m pip install cython==0.29.36 buildozer
-
-      - name: Preinstall Android SDK components + accept licenses
-        run: |
-          # Buildozer will download SDK/NDK here on first run
-          mkdir -p "${HOME}/.buildozer/android/platform/android-sdk/cmdline-tools"
-
-          # Run once to ensure buildozer creates folders + downloads cmdline-tools
-          # (It may fail later, that's ok for now)
-          buildozer -v android help || true
-
-          SDKROOT="${HOME}/.buildozer/android/platform/android-sdk"
-          yes | "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-
-          # Install minimal required packages so that aidl exists
-          "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" \
-            "build-tools;33.0.2" \
-            "platforms;android-33"
-
-          yes | "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses
+          python -m pip install "cython==0.29.36" buildozer
 
       - name: Build APK (debug)
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           buildozer -v android debug
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apk
