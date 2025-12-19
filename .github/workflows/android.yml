@@ -31,6 +31,26 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install cython==0.29.36 buildozer
 
+      - name: Preinstall Android SDK components + accept licenses
+        run: |
+          # Buildozer will download SDK/NDK here on first run
+          mkdir -p "${HOME}/.buildozer/android/platform/android-sdk/cmdline-tools"
+
+          # Run once to ensure buildozer creates folders + downloads cmdline-tools
+          # (It may fail later, that's ok for now)
+          buildozer -v android help || true
+
+          SDKROOT="${HOME}/.buildozer/android/platform/android-sdk"
+          yes | "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+          # Install minimal required packages so that aidl exists
+          "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "build-tools;33.0.2" \
+            "platforms;android-33"
+
+          yes | "${SDKROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses
+
       - name: Build APK (debug)
         run: |
           buildozer -v android debug
