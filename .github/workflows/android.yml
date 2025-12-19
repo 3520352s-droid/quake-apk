@@ -18,14 +18,15 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt update
           sudo apt install -y \
             openjdk-17-jdk \
             zip unzip \
             libstdc++6 \
-            libncurses5 \
+            libncurses6 \
+            libncurses-dev \
             libffi-dev \
             libssl-dev
+
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
