@@ -16,7 +16,7 @@ fullscreen = 0
 android.api = 33
 android.minapi = 21
 
-android.arch = arm64-v8a,armeabi-v7a
+android.archs = arm64-v8a,armeabi-v7a
 
 # 🔴 КРИТИЧЕСКИ ВАЖНО
 android.sdk_path = /home/runner/android-sdk
@@ -27,3 +27,4 @@ android.skip_update = True
 android.accept_sdk_license = True
 
 log_level = 2
+
