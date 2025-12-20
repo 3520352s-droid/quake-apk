@@ -8,7 +8,7 @@ source.include_exts = py
 
 version = 0.1
 
-requirements = python3,kivy,requests
+requirements = python3,kivy,pyjnius==1.6.1,requests,cython==0.29.36
 
 orientation = portrait
 fullscreen = 0
@@ -27,4 +27,5 @@ android.skip_update = True
 android.accept_sdk_license = True
 
 log_level = 2
+
 
