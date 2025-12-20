@@ -1,20 +1,10 @@
 [app]
-title = Quake Prob
+title = QuakeProb
 package.name = quakeprob
-package.domain = org.sergej
-# --- Force Buildozer to use GitHub Actions Android SDK/NDK ---
-android.accept_sdk_license = True
-android.sdk_path = /usr/local/lib/android/sdk
-android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653
-
-# Pin versions to avoid build-tools 36.x
-android.api = 33
-android.minapi = 21
-android.build_tools_version = 33.0.2
-
+package.domain = org.example
 
 source.dir = .
-source.include_exts = py,kv,png,jpg,ttf
+source.include_exts = py
 
 version = 0.1
 
@@ -23,9 +13,17 @@ requirements = python3,kivy,requests
 orientation = portrait
 fullscreen = 0
 
-android.permissions = INTERNET
+android.api = 33
+android.minapi = 21
 
-[buildozer]
+android.arch = arm64-v8a,armeabi-v7a
+
+# 🔴 КРИТИЧЕСКИ ВАЖНО
+android.sdk_path = /home/runner/android-sdk
+android.ndk_path = /home/runner/android-sdk/ndk/25.2.9519653
+
+# ускорение
+android.skip_update = True
+android.accept_sdk_license = True
+
 log_level = 2
-warn_on_root = 1
-
