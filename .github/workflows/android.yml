@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      # Use ONLY Java 17 for everything (sdkmanager + gradle)
+      # Java 17 for everything
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -28,20 +28,32 @@ jobs:
           sudo apt update
           sudo apt install -y \
             zip unzip git \
-            autoconf automake libtool \
-            pkg-config libltdl-dev \
-            zlib1g-dev libncurses5-dev \
-            libffi-dev libssl-dev \
+            autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses5-dev libffi-dev libssl-dev \
             cmake ninja-build
 
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
-
-      # Install EXACT Android components (including AIDL via build-tools)
-      - name: Install Android SDK components (with licenses)
+      # Create a local SDK root for buildozer (no legacy tools)
+      - name: Prepare local Android SDK + sdkmanager wrapper
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager --install \
+          set -e
+          mkdir -p "$HOME/android-sdk/tools/bin"
+          cat > "$HOME/android-sdk/tools/bin/sdkmanager" << 'EOF'
+          #!/usr/bin/env bash
+          set -e
+          exec /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root="$HOME/android-sdk" "$@"
+          EOF
+          chmod +x "$HOME/android-sdk/tools/bin/sdkmanager"
+
+          # sanity
+          "$HOME/android-sdk/tools/bin/sdkmanager" --version || true
+          "$HOME/android-sdk/tools/bin/sdkmanager" --list > /dev/null
+
+      - name: Install Android SDK packages (into $HOME/android-sdk)
+        run: |
+          set -e
+          yes | "$HOME/android-sdk/tools/bin/sdkmanager" --licenses
+
+          "$HOME/android-sdk/tools/bin/sdkmanager" --install \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;33.0.2" \
@@ -50,10 +62,10 @@ jobs:
 
       - name: Export Android env
         run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
-          echo "PATH=$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/build-tools/33.0.2:$PATH" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "PATH=$HOME/android-sdk/platform-tools:$HOME/android-sdk/build-tools/33.0.2:$HOME/android-sdk/tools/bin:$PATH" >> $GITHUB_ENV
 
       - name: Install Buildozer
         run: |
