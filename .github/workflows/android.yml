@@ -5,10 +5,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -28,41 +28,45 @@ jobs:
           sudo apt-get install -y \
             git unzip zip \
             build-essential \
-            libssl-dev libffi-dev \
-            libstdc++6 \
-            zlib1g-dev \
-            libncurses5 \
-            libncurses5-dev \
-            libtinfo5 \
+            libssl-dev libffi-dev zlib1g-dev \
+            libncurses6 libncurses-dev \
+            libtinfo6 \
             openjdk-17-jdk
 
-      # ---- ANDROID SDK LOCAL (HOME) ----
       - name: Prepare Android SDK dirs
         run: |
-          mkdir -p "$HOME/android-sdk"
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROIDSDK=$HOME/android-sdk" >> $GITHUB_ENV
           mkdir -p "$HOME/android-sdk/cmdline-tools"
-          mkdir -p "$HOME/android-sdk/platform-tools"
-          mkdir -p "$HOME/android-sdk/tools/bin"
 
       - name: Install Android cmdline-tools (latest)
         run: |
+          set -e
           cd "$HOME/android-sdk/cmdline-tools"
           curl -L -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
           unzip -q cmdline-tools.zip
           rm -f cmdline-tools.zip
-          # Google распаковывает в папку "cmdline-tools", переименуем в "latest"
-          rm -rf "$HOME/android-sdk/cmdline-tools/latest"
-          mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+          # внутри архива папка "cmdline-tools", переименуем в "latest"
+          rm -rf latest
+          mv cmdline-tools latest
 
       - name: Export Android env
         run: |
-          echo "ANDROIDSDK=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          # NDK ставим конкретную версию (проверенная, часто используемая buildozer/p4a)
-          echo "ANDROIDNDK=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
-          echo "PATH=$HOME/android-sdk/tools/bin:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$PATH" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/tools/bin" >> $GITHUB_PATH
+
+      - name: Fix legacy sdkmanager path for buildozer (no root)
+        run: |
+          # Buildozer часто ожидает sdkmanager по пути: $ANDROID_SDK_ROOT/tools/bin/sdkmanager
+          mkdir -p "$ANDROID_SDK_ROOT/tools/bin"
+          ln -sf "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "$ANDROID_SDK_ROOT/tools/bin/sdkmanager"
+          chmod +x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" || true
+          chmod +x "$ANDROID_SDK_ROOT/tools/bin/sdkmanager" || true
+          which sdkmanager
+          sdkmanager --version || true
 
       - name: Accept Android licenses
         run: |
@@ -70,62 +74,32 @@ jobs:
 
       - name: Install Android SDK components (with licenses)
         run: |
-          sdkmanager --install \
+          sdkmanager \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;33.0.2" \
-            "ndk;25.2.9519653"
-
-      # ---- IMPORTANT: legacy sdkmanager path expected by buildozer ----
-      # buildozer иногда ищет именно: $ANDROIDSDK/tools/bin/sdkmanager
-      # А настоящий sdkmanager лежит: $ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager
-      - name: Fix legacy sdkmanager path for buildozer (no root)
-        run: |
-          mkdir -p "$ANDROIDSDK/tools/bin"
-          ln -sf "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager" "$ANDROIDSDK/tools/bin/sdkmanager"
-          chmod +x "$ANDROIDSDK/tools/bin/sdkmanager"
-          echo "Legacy sdkmanager link:"
-          ls -la "$ANDROIDSDK/tools/bin/sdkmanager"
-          "$ANDROIDSDK/tools/bin/sdkmanager" --version
+            "ndk;25.2.9519653" \
+            "cmake;3.22.1"
 
       - name: Install Buildozer + Cython
         run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade buildozer Cython==0.29.36
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install buildozer cython
 
-      # (опционально) если хочешь всегда чистую сборку — раскомментируй
-      # - name: Clean buildozer cached SDK (optional)
-      #   run: |
-      #     rm -rf "$HOME/.buildozer"
+      - name: Clean buildozer cached SDK (optional)
+        run: |
+          rm -rf "$HOME/.buildozer/android" || true
 
       - name: Build APK (debug)
-        env:
-          ANDROIDSDK: ${{ env.ANDROIDSDK }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROIDNDK: ${{ env.ANDROIDNDK }}
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          JAVA_HOME: ${{ env.JAVA_HOME }}
         run: |
-          echo "ANDROIDSDK=$ANDROIDSDK"
-          echo "ANDROIDNDK=$ANDROIDNDK"
-          echo "JAVA_HOME=$JAVA_HOME"
-          which sdkmanager || true
-          "$ANDROIDSDK/tools/bin/sdkmanager" --version || true
-
-          # На всякий: чтобы buildozer не подцепил системный SDK
-          export ANDROIDSDK="$ANDROIDSDK"
-          export ANDROIDNDK="$ANDROIDNDK"
-          export ANDROID_HOME="$ANDROIDSDK"
-          export ANDROID_SDK_ROOT="$ANDROIDSDK"
-
+          # Если у тебя buildozer.spec в корне — этого достаточно
+          # Важно: Buildozer увидит ANDROID_SDK_ROOT/ANDROIDSDK из env
           buildozer -v android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-debug
+          name: apk
           path: |
             bin/*.apk
-            **/bin/*.apk
-
+            */bin/*.apk
