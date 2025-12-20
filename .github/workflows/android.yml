@@ -16,7 +16,6 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ВАЖНО: Java 17 ДО setup-android
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -50,19 +49,52 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install buildozer cython==0.29.36
-               - name: Clean buildozer cached SDK/NDK (force system SDK)
+
+      - name: Patch buildozer.spec to force system SDK/NDK and pin build-tools
+        run: |
+          if [ ! -f buildozer.spec ]; then
+            echo "ERROR: buildozer.spec not found in repo root"
+            ls -la
+            exit 1
+          fi
+
+          # Add settings only if not already present
+          add_line() {
+            local line="$1"
+            local key="$(echo "$line" | cut -d'=' -f1 | xargs)"
+            if grep -qE "^[[:space:]]*${key}[[:space:]]*=" buildozer.spec; then
+              echo "OK: ${key} already present"
+            else
+              echo "$line" >> buildozer.spec
+              echo "ADDED: $line"
+            fi
+          }
+
+          echo "" >> buildozer.spec
+          echo "# --- CI forced Android SDK/NDK config ---" >> buildozer.spec
+
+          add_line "android.accept_sdk_license = True"
+          add_line "android.sdk_path = /usr/local/lib/android/sdk"
+          add_line "android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653"
+          add_line "android.api = 33"
+          add_line "android.minapi = 21"
+          add_line "android.build_tools_version = 33.0.2"
+
+          echo "----- buildozer.spec (tail) -----"
+          tail -n 60 buildozer.spec
+
+      - name: Clean buildozer cached SDK/NDK (force system SDK)
         run: |
           rm -rf ~/.buildozer/android/platform/android-sdk || true
           rm -rf ~/.buildozer/android/platform/android-ndk-* || true
- 
 
-      - name: Build APK (debug) using system SDK (NOT ~/.buildozer SDK)
+      - name: Build APK (debug)
         env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROIDSDK: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROIDNDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.2.9519653
-          ANDROIDNDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.2.9519653
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROIDSDK: /usr/local/lib/android/sdk
+          ANDROIDNDK: /usr/local/lib/android/sdk/ndk/25.2.9519653
+          ANDROIDNDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
         run: |
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           echo "ANDROIDNDK=$ANDROIDNDK"
