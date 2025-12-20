@@ -35,7 +35,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android components (with licenses)
+      - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses
           sdkmanager \
@@ -43,50 +43,23 @@ jobs:
             "platforms;android-33" \
             "build-tools;33.0.2" \
             "ndk;25.2.9519653"
-          yes | sdkmanager --licenses
+
+      # 🔴 КЛЮЧЕВОЙ ХАК — ЧИНИМ sdkmanager ДЛЯ BUILDOZER
+      - name: Fix legacy sdkmanager path for buildozer
+        run: |
+          mkdir -p /usr/local/lib/android/sdk/tools/bin
+          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+                 /usr/local/lib/android/sdk/tools/bin/sdkmanager
+          chmod +x /usr/local/lib/android/sdk/tools/bin/sdkmanager
 
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip
           pip install buildozer cython==0.29.36
 
-      - name: Patch buildozer.spec to force system SDK/NDK and pin build-tools
+      - name: Clean buildozer cached SDK
         run: |
-          if [ ! -f buildozer.spec ]; then
-            echo "ERROR: buildozer.spec not found in repo root"
-            ls -la
-            exit 1
-          fi
-
-          # Add settings only if not already present
-          add_line() {
-            local line="$1"
-            local key="$(echo "$line" | cut -d'=' -f1 | xargs)"
-            if grep -qE "^[[:space:]]*${key}[[:space:]]*=" buildozer.spec; then
-              echo "OK: ${key} already present"
-            else
-              echo "$line" >> buildozer.spec
-              echo "ADDED: $line"
-            fi
-          }
-
-          echo "" >> buildozer.spec
-          echo "# --- CI forced Android SDK/NDK config ---" >> buildozer.spec
-
-          add_line "android.accept_sdk_license = True"
-          add_line "android.sdk_path = /usr/local/lib/android/sdk"
-          add_line "android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653"
-          add_line "android.api = 33"
-          add_line "android.minapi = 21"
-          add_line "android.build_tools_version = 33.0.2"
-
-          echo "----- buildozer.spec (tail) -----"
-          tail -n 60 buildozer.spec
-
-      - name: Clean buildozer cached SDK/NDK (force system SDK)
-        run: |
-          rm -rf ~/.buildozer/android/platform/android-sdk || true
-          rm -rf ~/.buildozer/android/platform/android-ndk-* || true
+          rm -rf ~/.buildozer || true
 
       - name: Build APK (debug)
         env:
@@ -96,8 +69,6 @@ jobs:
           ANDROIDNDK: /usr/local/lib/android/sdk/ndk/25.2.9519653
           ANDROIDNDK_HOME: /usr/local/lib/android/sdk/ndk/25.2.9519653
         run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROIDNDK=$ANDROIDNDK"
           buildozer -v android debug
 
       - name: Upload APK
