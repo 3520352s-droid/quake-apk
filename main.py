@@ -1,8 +1,11 @@
-import threading
-from datetime import datetime, timedelta, timezone
+# main.py
+# QuakeProb — индикатор времени с последнего глобального землетрясения (НЕ прогноз)
+# Проценты = (время с последнего события / средний исторический интервал) × 100%
+
+import datetime as dt
+from threading import Thread
 
 import requests
-
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -12,198 +15,213 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 
 
-# ===============================
-# НАСТРОЙКИ И КОНСТАНТЫ
-# ===============================
+# -----------------------------
+# НАСТРОЙКИ (константы)
+# -----------------------------
 
-USGS_API = "https://earthquake.usgs.gov/fdsnws/event/1/query"
-HTTP_TIMEOUT = 20
+# Ты просил: M7+ ~ раз в 1/15 года, M8+ ~ раз в год
+YEAR_DAYS = 365.25
+AVG_INTERVAL_DAYS_M7 = YEAR_DAYS / 15.0     # ≈ 24.35 дня
+AVG_INTERVAL_DAYS_M8 = YEAR_DAYS * 1.0      # ≈ 365.25 дня
 
-# Усреднённые глобальные интервалы
-# M7+ : ~15 событий в год  ->  1/15 года
-# M8+ : ~1 событие в год   ->  1 год
-CONSTANTS = {
-    "calculated_at": "2025-12-20",
-    "model": "global long-term average (simplified)",
-    "m7_mean_sec": (1.0 / 15.0) * 365.2425 * 24 * 3600,
-    "m8_mean_sec": 1.0 * 365.2425 * 24 * 3600,
-}
-
-
-# ===============================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ===============================
-
-def dt_to_iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+# Пороги для цветовой индикации (можешь менять)
+# <60% зелёный, 60–100% жёлтый, >100% красный
+def percent_to_color(p: float):
+    if p < 60:
+        return (0.15, 0.85, 0.25, 1)  # green
+    if p < 100:
+        return (0.95, 0.75, 0.15, 1)  # yellow/orange
+    return (0.95, 0.20, 0.20, 1)      # red
 
 
-def fetch_last_event_time(min_mag: float) -> datetime | None:
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=365 * 120)
+# -----------------------------
+# USGS (последнее событие)
+# -----------------------------
 
+def fetch_last_quake_time_utc(min_magnitude: float) -> dt.datetime:
+    """
+    Возвращает время последнего события >= min_magnitude (UTC) через USGS GeoJSON.
+    """
+    # USGS endpoint: latest event for magnitude >= X
+    # orderby=time&limit=1 — берём самое свежее
+    url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
     params = {
         "format": "geojson",
-        "starttime": dt_to_iso(start),
-        "endtime": dt_to_iso(now),
-        "minmagnitude": str(min_mag),
-        "orderby": "time-desc",
+        "minmagnitude": str(min_magnitude),
+        "orderby": "time",
         "limit": "1",
     }
 
-    r = requests.get(USGS_API, params=params, timeout=HTTP_TIMEOUT)
+    r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
 
-    feats = data.get("features", [])
-    if not feats:
-        return None
+    features = data.get("features", [])
+    if not features:
+        raise RuntimeError(f"USGS не вернул событий для M{min_magnitude}+ (пусто)")
 
-    t_ms = feats[0]["properties"].get("time")
-    return datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc)
+    props = features[0].get("properties", {})
+    t_ms = props.get("time")
+    if t_ms is None:
+        raise RuntimeError("USGS ответ без поля properties.time")
 
-
-def format_duration(seconds: float) -> str:
-    minutes = int(seconds // 60)
-    hours = minutes // 60
-    days = hours // 24
-    return f"{days}д {hours % 24}ч"
-
-
-def color_for_percent(p: float):
-    """
-    Цвет фона по прогрессу.
-    Это НЕ опасность, а индикатор времени.
-    """
-    if p < 70:
-        return (0.2, 0.75, 0.2, 1)   # зелёный
-    elif p < 130:
-        return (1.0, 0.8, 0.2, 1)    # жёлтый
-    else:
-        return (0.85, 0.2, 0.2, 1)   # красный
+    # time приходит в миллисекундах unix epoch
+    t = dt.datetime.fromtimestamp(t_ms / 1000.0, tz=dt.timezone.utc)
+    return t
 
 
-# ===============================
+def compute_percent_since(last_time_utc: dt.datetime, avg_interval_days: float) -> float:
+    now = dt.datetime.now(dt.timezone.utc)
+    elapsed = now - last_time_utc
+    elapsed_days = elapsed.total_seconds() / 86400.0
+    return (elapsed_days / avg_interval_days) * 100.0
+
+
+# -----------------------------
 # UI
-# ===============================
+# -----------------------------
 
-class QuakeUI(BoxLayout):
+class QuakeProbUI(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(
-            orientation="vertical",
-            padding=dp(16),
-            spacing=dp(16),
-            **kwargs
-        )
+        super().__init__(orientation="vertical", padding=dp(16), spacing=dp(12), **kwargs)
+        Window.clearcolor = (0, 0, 0, 1)
 
+        # Заголовок
         self.title = Label(
-            text=(
-                "Глобальные землетрясения\n"
-                "Индикатор времени (НЕ прогноз)"
-            ),
-            font_size="22sp",
+            text="Глобальные землетрясения\nИндикатор времени (НЕ прогноз)",
             halign="center",
             valign="middle",
+            font_size="22sp",
+            color=(1, 1, 1, 1),
             size_hint=(1, 0.18),
         )
-        self.title.bind(size=lambda *a: setattr(self.title, "text_size", self.title.size))
+        self.title.bind(size=self._sync_text)
+        self.add_widget(self.title)
 
-        self.big = Label(
-            text="M7+: —\nM8+: —",
-            font_size="44sp",
+        # Большие значения
+        self.m7_label = Label(
+            text="M7+: —",
             halign="center",
             valign="middle",
-            size_hint=(1, 0.34),
+            font_size="56sp",
+            bold=True,
+            color=(1, 1, 1, 1),
+            size_hint=(1, 0.14),
         )
-        self.big.bind(size=lambda *a: setattr(self.big, "text_size", self.big.size))
+        self.m7_label.bind(size=self._sync_text)
+        self.add_widget(self.m7_label)
 
-        self.details = Label(
+        self.m8_label = Label(
+            text="M8+: —",
+            halign="center",
+            valign="middle",
+            font_size="56sp",
+            bold=True,
+            color=(1, 1, 1, 1),
+            size_hint=(1, 0.14),
+        )
+        self.m8_label.bind(size=self._sync_text)
+        self.add_widget(self.m8_label)
+
+        # Пояснение
+        self.help_label = Label(
             text=(
                 "Проценты =\n"
                 "(время с последнего события /\n"
                 "средний исторический интервал) × 100%\n\n"
                 "Нажми кнопку для расчёта."
             ),
-            font_size="18sp",
             halign="center",
             valign="middle",
-            size_hint=(1, 0.33),
+            font_size="18sp",
+            color=(0.85, 0.85, 0.85, 1),
+            size_hint=(1, 0.28),
         )
-        self.details.bind(size=lambda *a: setattr(self.details, "text_size", self.details.size))
+        self.help_label.bind(size=self._sync_text)
+        self.add_widget(self.help_label)
 
+        # Кнопка
         self.btn = Button(
             text="Рассчитать\nна сегодня",
-            font_size="26sp",
-            size_hint=(1, 0.15),
+            font_size="28sp",
+            size_hint=(1, 0.26),
+            background_normal="",
+            background_color=(0.35, 0.35, 0.35, 1),
+            color=(1, 1, 1, 1),
         )
-        self.btn.bind(on_press=self.on_press)
-
-        self.add_widget(self.title)
-        self.add_widget(self.big)
-        self.add_widget(self.details)
+        self.btn.bind(on_release=self.on_press)
         self.add_widget(self.btn)
 
+        # Статус
+        self.status = Label(
+            text="",
+            halign="center",
+            valign="middle",
+            font_size="14sp",
+            color=(0.7, 0.7, 0.7, 1),
+            size_hint=(1, 0.08),
+        )
+        self.status.bind(size=self._sync_text)
+        self.add_widget(self.status)
+
+    def _sync_text(self, label, _size):
+        label.text_size = label.size
+
     def on_press(self, *_):
+        # ВАЖНО: запросы и расчёты — в отдельном потоке, иначе Android часто «убивает» приложение.
         self.btn.disabled = True
-        self.details.text = "Запрашиваю данные USGS…"
-        threading.Thread(target=self._worker, daemon=True).start()
+        self.status.text = "Считаю…"
+        Thread(target=self._worker, daemon=True).start()
 
     def _worker(self):
         try:
-            now = datetime.now(timezone.utc)
+            last_m7 = fetch_last_quake_time_utc(7.0)
+            last_m8 = fetch_last_quake_time_utc(8.0)
 
-            last7 = fetch_last_event_time(7.0)
-            last8 = fetch_last_event_time(8.0)
+            p7 = compute_percent_since(last_m7, AVG_INTERVAL_DAYS_M7)
+            p8 = compute_percent_since(last_m8, AVG_INTERVAL_DAYS_M8)
 
-            if not last7 or not last8:
-                raise RuntimeError("Не удалось получить данные.")
-
-            elapsed7 = (now - last7).total_seconds()
-            elapsed8 = (now - last8).total_seconds()
-
-            p7 = (elapsed7 / CONSTANTS["m7_mean_sec"]) * 100.0
-            p8 = (elapsed8 / CONSTANTS["m8_mean_sec"]) * 100.0
-
-            big_text = f"M7+: {p7:.1f}%\nM8+: {p8:.1f}%"
-
-            worst = max(p7, p8)
-            bg_color = color_for_percent(worst)
-
-            details_text = (
-                "Это НЕ вероятность.\n"
-                "Это отношение прошедшего времени\n"
-                "к среднему интервалу.\n\n"
-                f"M7+ прошло: {format_duration(elapsed7)}\n"
-                f"M8+ прошло: {format_duration(elapsed8)}\n\n"
-                "Зелёный < 70%\n"
-                "Жёлтый 70–130%\n"
-                "Красный > 130%"
-            )
-
-            Clock.schedule_once(
-                lambda dt: self._show(big_text, details_text, bg_color),
-                0
-            )
+            # Передаём результат в UI-поток
+            Clock.schedule_once(lambda dt_: self._update_ui(p7, p8, last_m7, last_m8), 0)
 
         except Exception as e:
-            Clock.schedule_once(lambda dt: self._error(str(e)), 0)
+            Clock.schedule_once(lambda dt_: self._show_error(str(e)), 0)
 
-    def _show(self, big_text, details_text, bg_color):
-        Window.clearcolor = bg_color
-        self.big.text = big_text
-        self.details.text = details_text
+    def _update_ui(self, p7, p8, last_m7, last_m8):
+        # Округление
+        p7_show = round(p7, 1)
+        p8_show = round(p8, 1)
+
+        self.m7_label.text = f"M7+: {p7_show}%"
+        self.m8_label.text = f"M8+: {p8_show}%"
+
+        self.m7_label.color = percent_to_color(p7)
+        self.m8_label.color = percent_to_color(p8)
+
+        # Покажем дату последнего события (UTC) маленьким текстом
+        self.status.text = (
+            f"Последнее M7+ (UTC): {last_m7.strftime('%Y-%m-%d %H:%M')}\n"
+            f"Последнее M8+ (UTC): {last_m8.strftime('%Y-%m-%d %H:%M')}"
+        )
+
         self.btn.disabled = False
 
-    def _error(self, msg):
-        self.details.text = "Ошибка:\n" + msg
+    def _show_error(self, msg: str):
+        self.m7_label.text = "M7+: ошибка"
+        self.m8_label.text = "M8+: ошибка"
+        self.m7_label.color = (1, 0.3, 0.3, 1)
+        self.m8_label.color = (1, 0.3, 0.3, 1)
+
+        # Частые причины: нет интернета, USGS временно недоступен
+        self.status.text = "Ошибка: " + msg
         self.btn.disabled = False
 
 
-class QuakeApp(App):
+class QuakeProbApp(App):
     def build(self):
-        Window.clearcolor = (0, 0, 0, 1)
-        return QuakeUI()
+        self.title = "QuakeProb"
+        return QuakeProbUI()
 
 
 if __name__ == "__main__":
-    QuakeApp().run()
+    QuakeProbApp().run()
