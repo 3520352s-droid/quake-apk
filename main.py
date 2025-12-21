@@ -2,6 +2,7 @@
 import datetime as dt
 import threading
 import traceback
+import certifi
 
 import requests
 
@@ -137,7 +138,7 @@ class QuakeProbUI(BoxLayout):
         }
 
         # timeout обязателен, иначе может зависнуть
-        r = requests.get(url, params=params, timeout=20)
+        r = requests.get(url, params=params, timeout=20,verify=where())
         r.raise_for_status()
 
         data = r.json()
@@ -158,4 +159,5 @@ class QuakeProbApp(App):
 
 if __name__ == "__main__":
     QuakeProbApp().run()
+
 
